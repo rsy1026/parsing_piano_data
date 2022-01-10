@@ -45,4 +45,8 @@ The current code includes several steps:
 
 Other things
 - 못갖춘마디도 마디수에 포함 
+<<<<<<< HEAD
  
+=======
+
+>>>>>>> 2926c5aa0dd6e84d736fe8359baf82dbf3a3c22a

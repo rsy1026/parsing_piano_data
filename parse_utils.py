@@ -36,10 +36,58 @@ def ind2str(ind, n):
 def remove_files():
     # parent_path = '/home/rsy/Dropbox/RSY/Piano/data/chopin_maestro/original'
     # parent_path = '/data/chopin_cleaned/original/Chopin_Nocturne'
-    parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
-    assert os.path.exists(parent_path)
+    # parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
+    # assert os.path.exists(parent_path)
     # parent_path = '/data/chopin_cleaned/exp_data/test/raw/Chopin_Etude'
-    # parent_path = '/data/chopin_maestro/original/Chopin_Etude'
+    parent_path = '/data/chopin_cleaned/original'
+    categs = sorted(glob(os.path.join(parent_path, '*/')))
+    all_files = list()
+    for c in categs:
+        # c = categs[3]
+        pieces = sorted(glob(os.path.join(c, '*/')))
+        for p in pieces:
+            # p = pieces[-1]
+            # p_name = p.split("/")[-2]
+            # if p_name.split('_')[0] not in ['10', '25']:
+            #     all_files += [p]
+
+            # c_name = "Mozart_Piano_Sonatas"
+            # p_name = "8-1"
+
+            # p = os.path.join(parent_path, c_name, p_name)
+            players = sorted(glob(os.path.join(p, '*/')))
+            npy_files = sorted(glob(os.path.join(p, '*.npy')))
+            # xml_files = sorted(glob(os.path.join(p, '*.musicxml')))
+            # mid_files = sorted(glob(os.path.join(p, '*.mid')))
+            all_files += npy_files
+            # for a in all_files:
+            #     os.remove(a)
+            for pl in players:
+                txt_files = sorted(glob(os.path.join(pl, '*.txt')))
+                npy_files = sorted(glob(os.path.join(pl, '*.npy')))
+                # npy_files = sorted(glob(os.path.join(pl, 'inp*.npy')))
+                # npy_files += sorted(glob(os.path.join(pl, 'oup*.npy')))
+                # xml_files = sorted(glob(os.path.join(pl, '*.xml')))
+                mid_files = sorted(glob(os.path.join(pl, '*.cleaned.mid')))
+                # mid_files += sorted(glob(os.path.join(pl, 'score_ref.mid')))
+                # all_files = sorted(glob(os.path.join(pl, '*.cleaned.cleaned_*')))
+                # all_files = txt_files + npy_files + xml_files + mid_files
+                all_files += txt_files + mid_files + npy_files
+                # all_files = mid_files + txt_files
+                # shutil.rmtree(pl[:-1])
+                
+    ## REMOVE ALL FILES ##
+    for a in all_files:
+        os.remove(a)
+
+
+def remove_midi_files():
+    # parent_path = '/home/rsy/Dropbox/RSY/Piano/data/chopin_maestro/original'
+    # parent_path = '/data/chopin_cleaned/original/Chopin_Nocturne'
+    # parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
+    # assert os.path.exists(parent_path)
+    # parent_path = '/data/chopin_cleaned/exp_data/test/raw/Chopin_Etude'
+    parent_path = '/data/chopin_cleaned/original'
     categs = sorted(glob(os.path.join(parent_path, '*/')))
     for c in categs:
         pieces = sorted(glob(os.path.join(c, '*/')))
@@ -58,20 +106,16 @@ def remove_files():
             # for a in all_files:
             #     os.remove(a)
             for pl in players:
-                txt_files = sorted(glob(os.path.join(pl, '*.txt')))
-                npy_files = sorted(glob(os.path.join(pl, '*.npy')))
-                # npy_files = sorted(glob(os.path.join(pl, 'inp2.npy')))
-                # npy_files += sorted(glob(os.path.join(pl, 'oup*.npy')))
-                # xml_files = sorted(glob(os.path.join(pl, '*.xml')))
-                mid_files = sorted(glob(os.path.join(pl, '*.cleaned.mid')))
-                # mid_files += sorted(glob(os.path.join(pl, 'score_ref.mid')))
-                # all_files = sorted(glob(os.path.join(pl, '*.cleaned.cleaned_*')))
-                # all_files = txt_files + npy_files + xml_files + mid_files
-                all_files = txt_files + mid_files + npy_files
-                # all_files = mid_files + txt_files
+                mid_files = sorted(glob(os.path.join(pl, '*.mid')))
+                MID_files = sorted(glob(os.path.join(pl, '*.MID')))
+
+                if len(MID_files) > 0 and len(mid_files) > 0:
+                    all_files = mid_files
+                else:
+                    all_files = []
+                    # all_files = mid_files + txt_files
                 for a in all_files:
                     os.remove(a)
-                # shutil.rmtree(pl[:-1])
 
 # def moving_average(x, w):
 #     assert len(x.shape) == 1

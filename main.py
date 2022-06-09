@@ -84,8 +84,8 @@ class XML_SCORE_PERFORM_MATCH(object):
         return save_name
 
     def align_xml_midi(
-        self, xml, score, performs, corresps, 
-        save_pairs=None, plain=None, plot=None):
+        self, xml, score, performs=None, corresps=None, 
+        save_pairs=None, plain=True, plot=None):
         
         # load xml object 
         XMLDocument = MusicXMLDocument(xml)
@@ -107,29 +107,33 @@ class XML_SCORE_PERFORM_MATCH(object):
               xml_parsed, score_parsed, xml_score_pairs, 
               s_name=".".join(xml.split("/")[-3:-1]))
 
-        pairs_all = dict()
-        for perform, corresp in zip(performs, corresps):
-            # match score pairs with perform midi
-            perform_parsed, _ = extract_midi_notes(perform, clean=False, no_pedal=True)
-            num_perform = len(perform_parsed)
-            corresp_parsed = extract_corresp(corresp, num_score, num_perform)
-            xml_score_perform_pairs = match_score_to_performMIDI(
-                xml_score_pairs, corresp_parsed, perform_parsed, score_parsed, xml_parsed)   
+        if performs is not None or corresps is not None:
+            pairs_all = dict()
+            for perform, corresp in zip(performs, corresps):
+                # match score pairs with perform midi
+                perform_parsed, _ = extract_midi_notes(perform, clean=False, no_pedal=True)
+                num_perform = len(perform_parsed)
+                corresp_parsed = extract_corresp(corresp, num_score, num_perform)
+                xml_score_perform_pairs = match_score_to_performMIDI(
+                    xml_score_pairs, corresp_parsed, perform_parsed, score_parsed, xml_parsed)   
 
-            if save_pairs is True:
-                if self.save_dir is None:
-                    save_dir_ = os.path.dirname(perform)
+                if save_pairs is True:
+                    if self.save_dir is None:
+                        save_dir_ = os.path.dirname(perform)
+                    else:
+                        save_dir_ = self.save_dir
+                    np.save(os.path.join(save_dir_, 
+                        "xml_score_perform_pairs.npy"), xml_score_perform_pairs)
+                    pairs_all = None
+                    print("saved pairs for {} at {}".format(os.path.basename(perform), save_dir_))
                 else:
-                    save_dir_ = self.save_dir
-                np.save(os.path.join(save_dir_, 
-                    "xml_score_perform_pairs.npy"), xml_score_perform_pairs)
-                pairs_all = None
-                print("saved pairs for {} at {}".format(os.path.basename(perform), save_dir_))
-            else:
-                pairs_all[os.path.basename(perform)] = xml_score_perform_pairs
-                print("parsed pairs for {}".format(os.path.basename(perform)))
+                    pairs_all[os.path.basename(perform)] = xml_score_perform_pairs
+                    print("parsed pairs for {}".format(os.path.basename(perform)))
 
-        print("** aligned score xml-score midi-perform midi! **")    
+            print("** aligned score xml-score midi-perform midi! **") 
+
+        else:
+            pairs_all = xml_score_pairs   
 
         return pairs_all
 

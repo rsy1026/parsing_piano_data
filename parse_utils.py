@@ -12,6 +12,8 @@ import time
 import shutil
 from decimal import Decimal, getcontext, ROUND_HALF_UP, InvalidOperation
 import copy
+import mido
+import scipy.stats as stats
 
 import matplotlib
 matplotlib.use("agg")
@@ -36,10 +38,10 @@ def ind2str(ind, n):
 def remove_files():
     # parent_path = '/home/rsy/Dropbox/RSY/Piano/data/chopin_maestro/original'
     # parent_path = '/data/chopin_cleaned/original/Chopin_Nocturne'
-    # parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
+    parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
     # assert os.path.exists(parent_path)
     # parent_path = '/data/chopin_cleaned/exp_data/test/raw/Chopin_Etude'
-    parent_path = '/data/chopin_cleaned/original'
+    # parent_path = '/data/chopin_cleaned/original'
     categs = sorted(glob(os.path.join(parent_path, '*/')))
     all_files = list()
     for c in categs:
@@ -220,6 +222,36 @@ def moving_average(data, win_len=None, stat=np.mean, half=False):
 
     return np.asarray(new_data)
 
+def moving_mode(data, win_len=None, half=False):
+    '''
+    data = [timestep, feature]
+    '''
+    assert len(data.shape) == 2
+    new_data = list()
+
+    if half is False:
+        assert win_len % 2 == 1 
+        assert win_len > 1
+        unit = (win_len - 1) // 2
+    elif half is True:
+        unit = int(win_len - 1)
+
+    for i in range(len(data)):
+        if half is False:
+            minind = np.max([0, i-unit])
+            maxind = np.min([len(data), i+unit+1])
+        elif half is True:
+            minind = np.max([0, i-unit])
+            maxind = np.min([len(data), i+1])     
+        data_in_range = data[minind:maxind]       
+        
+        in_range = [d for d in data_in_range if d is not None]
+        assert len(in_range) > 0
+        mean_data = stats.mode(in_range, axis=0).mode.reshape(-1,)
+        new_data.append(mean_data)
+
+    return np.asarray(new_data)
+
 def quantize(x, unit=None):
     div = x // unit
     x_prev = unit * div
@@ -245,13 +277,14 @@ def quantize_to_frame(value, unit):
     return sample
 
 def make_pianoroll(notes, start=None, maxlen=None, 
-    unit=None, front_buffer=0., back_buffer=0.):
+    start_pitch=21, num_pitch=88,
+    unit=None, front_buffer=0., back_buffer=0., cut_end=True):
     '''
     unit, buffers: in seconds
     start: time to subtract to make roll start at certain time
     '''
 
-    unit = float(round(Decimal(str(unit)), 3))
+    # unit = float(round(Decimal(str(unit)), 3))
     if start is None:
         start = np.min([n.start for n in notes])
     if maxlen is None:
@@ -263,12 +296,13 @@ def make_pianoroll(notes, start=None, maxlen=None,
     front_buffer_sample = quantize_to_frame(front_buffer, unit=unit)
     back_buffer_sample = quantize_to_frame(back_buffer, unit=unit)
     maxlen += back_buffer_sample + front_buffer_sample
-    roll = np.zeros([88, maxlen])
+    roll = np.zeros([num_pitch, maxlen])
+    onset_roll = np.zeros([num_pitch, maxlen])
 
     onset_list = list()
     offset_list = list()
     for n in notes:
-        pitch = n.pitch - 21
+        pitch = n.pitch - start_pitch
         if n.pitch >= 70: # right-hand(temporary)
             hand = 0
         elif n.pitch < 70: # left-hand(temporary)
@@ -281,14 +315,123 @@ def make_pianoroll(notes, start=None, maxlen=None,
         dur = quantize_to_frame(dur_raw, unit=unit) 
         onset = quantize_to_frame(
             n.start - start + front_buffer, unit=unit)  
-        offset = onset + dur    
-        onset_list.append([hand, onset])
-        offset_list.append([hand, offset])       
+        offset = onset + dur  
         vel = n.velocity
+        onset_list.append([hand, onset])
+        offset_list.append([hand, offset]) 
+
+        # if onset < maxlen:  
+        assert onset < maxlen
         roll[pitch, onset:offset] = vel
-    last_offset = np.max([o[1] for o in offset_list])
-    roll = roll[:,:last_offset+back_buffer_sample] 
-    return roll, onset_list, offset_list
+        onset_roll[pitch, onset] = offset - onset
+            
+    if cut_end is True:
+        last_offset = np.max([o[1] for o in offset_list])
+        roll = roll[:,:last_offset+back_buffer_sample] 
+        onset_roll = onset_roll[:,:last_offset+back_buffer_sample] 
+    elif cut_end is False:
+        pass
+        
+    return roll, onset_list, onset_roll
+
+def pianoroll_to_notes(roll, time_unit=0.125, scale_pitch=21, vel=False, onset=True):
+    '''
+    time_unit: time duration per frame
+    '''
+    if onset is True:
+        assert len(np.unique(roll)) > 2, "** Onset True but it's binary roll!"
+
+    note_list = list()
+    note_dict = dict()
+    for d in range(roll.shape[1]):
+        note_dict[d] = [0,0] # [start, dur]
+    
+    # for processing the last frame
+    roll = np.concatenate([roll, np.zeros_like(roll[:1])], axis=0)
+
+    '''
+    0 0 -> no note
+    0 1 -> new start
+    1 0 -> wrap up prev note
+    n 0 -> wrap up prev note
+    1 1 -> sustain
+    n 1 -> sustain
+    0 n -> new start
+    1 n -> wrap up prev note + new start
+    n n -> wrap up prev note + new start
+    '''
+    for f, frame in enumerate(roll):
+        for p in range(len(frame)):
+            if frame[p] == 1:
+                if f == 0: # start 
+                    start = f * unit
+                    note_dict[p] = [start, 1]
+                elif f > 0: # middle
+                    prev_f = roll[f-1]
+                    if prev_f[p] == 0: # new start (0 1)
+                        note_dict[p] = [start, 1] 
+                        start = f * unit
+                    elif prev_f[p] >= 1: # sustain (1 1), (n 1)
+                        note_dict[p][1] += 1
+            
+            elif frame[p] > 1:
+                if f == 0: # start 
+                    start = f * unit
+                    note_dict[p] = [start, 1]
+                elif f > 0: # new start
+                    dur = note_dict[p][1]
+                    if dur > 0:
+                        # (1 n), (n n)
+                        start = note_dict[p][0]
+                        end = start + dur * unit 
+                        pitch = p + scale_pitch
+                        if vel is False:
+                            vel = 64
+                        elif vel is True:
+                            vel = frame[p]
+                        # new note
+                        midi_note = pretty_midi.containers.Note(
+                            velocity=vel, pitch=pitch, start=start, end=end) 
+                        note_list.append(midi_note)
+                    # initiate
+                    start = f * unit
+                    note_dict[p] = [start, 1]
+                    
+            elif frame[p] == 0:
+                if f == 0: # start
+                    pass 
+                elif f > 0: # middle
+                    prev_f = roll[f-1]
+                    if prev_f[p] == 0: # no note (0 0)
+                        pass 
+                    elif prev_f[p] >= 1: # note stop (n 0), (1 0)
+                        dur = note_dict[p][1]
+                        if dur > 0:
+                            start = note_dict[p][0]
+                            end = start + dur * unit
+                            pitch = p + scale_pitch
+                            if vel is False:
+                                vel = 64
+                            elif vel is True:
+                                vel = frame[p]
+                            # new note
+                            midi_note = pretty_midi.containers.Note(
+                                velocity=vel, pitch=pitch, start=start, end=end) 
+                            note_list.append(midi_note)
+                            note_dict[p][1] = 0 # init dur
+                        elif dur == 0:
+                            pass
+        
+    note_list = sorted(note_list, key=lambda x: x.start)
+    return note_list
+                                                    
+
+
+
+
+
+
+
 
 def check_note_measure_pair(xml_notes, xml_measures):
     for n, m in zip(xml_notes, xml_measures):
@@ -396,12 +539,13 @@ def extract_xml_raw(xml_doc, measures=None):
 
     return note_measure_pair
 
-def get_tempo_from_xml(xml_path, measure_start):
+def get_signatures_from_xml(xml_path, measure_start):
     xml_doc = MusicXMLDocument(xml_path)
     xml = extract_xml_raw(xml_doc)
     # parse tempo from xml
     tempo_list = list()
     time_sig = list()
+    key_sig = list()
     prev_measure = -1
     for x in xml:
         # get tempo
@@ -418,8 +562,16 @@ def get_tempo_from_xml(xml_path, measure_start):
         if x['measure'].time_signature is not None:
             if prev_measure < x['note'].measure_number:
                 time_sig.append([x['note'].measure_number, x['measure'].time_signature])
+        
+        # get key signature
+        if x['measure'].key_signature is not None:
+            if prev_measure < x['note'].measure_number:
+                key_sig.append([x['note'].measure_number, x['measure'].key_signature])
+                
+        # update prev measure number
         prev_measure = x['note'].measure_number
-
+    
+    # choose one tempo
     if len(tempo_list) > 0:
         for t in tempo_list:
             if measure_start > t[1]:
@@ -431,40 +583,44 @@ def get_tempo_from_xml(xml_path, measure_start):
 
     assert tempo is not None
     assert len(time_sig) > 0
-    return tempo, np.asarray(time_sig)
+    assert len(key_sig) > 0
+    return tempo, np.asarray(time_sig), np.asarray(key_sig)
     
 def extract_xml_notes(
     xml_doc, note_only=True, apply_grace=True, apply_tie=True):
-    part = xml_doc.parts[0]
+    parts = xml_doc.parts
     xml_measures = list()
     xml_notes = list()
+    
     # collect all note/measure objects 
-    for measure in part.measures:
-        for note in measure.notes:
-            if note_only is True:
-                if apply_grace is False:
-                    if note.is_rest is False and note.is_grace_note is False:
-                        xml_notes.append(note)
-                        xml_measures.append(measure) 
-                elif apply_grace is True:
-                    if note.is_rest is False: 
-                        xml_notes.append(note)
-                        xml_measures.append(measure)  
+    for part in parts:
+        for measure in part.measures:
+            for note in measure.notes:
+                if note_only is True:
+                    if apply_grace is False:
+                        if note.is_rest is False and note.is_grace_note is False:
+                            xml_notes.append(note)
+                            xml_measures.append(measure) 
+                    elif apply_grace is True:
+                        if note.is_rest is False: 
+                            xml_notes.append(note)
+                            xml_measures.append(measure)  
 
-            elif note_only is False:
-                if apply_grace is False:
-                    if note.is_grace_note is False:
+                elif note_only is False:
+                    if apply_grace is False:
+                        if note.is_grace_note is False:
+                            xml_notes.append(note)
+                            xml_measures.append(measure)
+                    elif apply_grace is True:
                         xml_notes.append(note)
-                        xml_measures.append(measure)
-                elif apply_grace is True:
-                    xml_notes.append(note)
-                    xml_measures.append(measure)   
+                        xml_measures.append(measure)   
                                      
     # sort xml notes 
     if note_only is True:
         xml_notes.sort(key=lambda x: x.pitch[1]) 
     xml_notes.sort(key=lambda x: x.note_duration.time_position)
-    xml_notes.sort(key=lambda x: x.measure_number)  
+    xml_notes.sort(key=lambda x: x.measure_number) 
+    xml_measures.sort(key=lambda x: x.notes[0].measure_number)  
 
     ## post-process ##
     # for applying grace
@@ -601,9 +757,68 @@ def check_overlapped_midi_notes():
             print("checked midi for {}: {} ({}/{})".format(
                 category, piece, len(midi_notes), len(midi_notes_)))
 
-def get_cleaned_midi(filepath, no_vel=None, no_pedal=None):
+def erase_track_prettyMIDI(filepath, erase_ind=None):
+
+    midi_data = mido.MidiFile(filepath)
+    if type(erase_ind) is not list:
+        erase_ind = [erase_ind]
+    for i in erase_ind:
+        midi_data.tracks[i] = []
+    
+    # load as PrettyMIDI object 
+    PM = pretty_midi.PrettyMIDI()
+
+    for track in midi_data.tracks:
+        tick = 0
+        for event in track:
+            event.time += tick
+            tick = event.time
+
+    # Store the resolution for later use
+    PM.resolution = midi_data.ticks_per_beat
+
+    # Populate the list of tempo changes (tick scales)
+    PM._load_tempo_changes(midi_data)
+
+    # Update the array which maps ticks to time
+    MAX_TICK = 1e7
+    max_tick = max([max([e.time for e in t])
+                    for t in midi_data.tracks if len(t) > 0]) + 1
+    # If max_tick is huge, the MIDI file is probably corrupt
+    # and creating the __tick_to_time array will thrash memory
+    if max_tick > MAX_TICK:
+        raise ValueError(('MIDI file has a largest tick of {},'
+                            ' it is likely corrupt'.format(max_tick)))
+
+    # Create list that maps ticks to time in seconds
+    PM._update_tick_to_time(max_tick)
+
+    # Populate the list of key and time signature changes
+    PM._load_metadata(midi_data)
+
+    # Check that there are tempo, key and time change events
+    # only on track 0
+    if any(e.type in ('set_tempo', 'key_signature', 'time_signature')
+            for track in midi_data.tracks[1:] for e in track):
+        warnings.warn(
+            "Tempo, Key or Time signature change events found on "
+            "non-zero tracks.  This is not a valid type 0 or type 1 "
+            "MIDI file.  Tempo, Key or Time Signature may be wrong.",
+            RuntimeWarning)
+
+    # Populate the list of instruments
+    PM._load_instruments(midi_data)
+
+    return PM
+
+
+def get_cleaned_midi(filepath, no_vel=None, no_pedal=None, erase_track=None):
     filename = os.path.basename(filepath).split('.')[0]
-    midi = pretty_midi.PrettyMIDI(filepath)
+    if erase_track is not None:
+        midi = erase_track_prettyMIDI(filepath, erase_ind=erase_track)
+    else:
+        midi = pretty_midi.PrettyMIDI(filepath)
+
     midi_new = pretty_midi.PrettyMIDI(resolution=10000, initial_tempo=120) # new midi object
     inst_new = pretty_midi.Instrument(0) # new instrument object
     min_pitch, max_pitch = 21, 108
@@ -633,14 +848,15 @@ def get_cleaned_midi(filepath, no_vel=None, no_pedal=None):
     return midi_new
 
 def extract_midi_notes(
-    midi_path, clean=False, inst_num=None, no_pedal=False, save=False, savepath=None):
+    midi_path, clean=False, erase_track=None, inst_num=None, 
+    no_pedal=False, raw=False, save=False, savepath=None):
     if clean is False:
         midi_obj = get_cleaned_midi(
-            midi_path, no_vel=False, no_pedal=no_pedal)
+            midi_path, no_vel=False, no_pedal=no_pedal, erase_track=erase_track)
 
     elif clean is True:
         midi_obj = get_cleaned_midi(
-            midi_path, no_vel=True, no_pedal=True)
+            midi_path, no_vel=True, no_pedal=True, erase_track=erase_track)
 
     midi_notes = list()
     ccs = list()
@@ -657,7 +873,10 @@ def extract_midi_notes(
             ccs.append(cc)
 
     midi_notes.sort(key=lambda x: x.start)
-    midi_notes_ = remove_overlaps_midi(midi_notes)
+    if raw is False:
+        midi_notes_ = remove_overlaps_midi(midi_notes)
+    else:
+        midi_notes_ = midi_notes
     midi_notes_.sort(key=lambda x: x.pitch)
     midi_notes_.sort(key=lambda x: x.start)
     
@@ -1358,11 +1577,12 @@ def make_midi_start_zero(notes):
     return new_notes    
 
 def save_changed_midi(
-    filepath, savename=None, save=True, change_tempo=None, change_dynamics=None):
+    notes, savename=None, save=True, change_tempo=None, change_art=None, change_dynamics=None):
     # load midi notes
-    notes = extract_midi_notes(filepath)
+    # notes, _ = extract_midi_notes(filepath, clean=False)
     t_ratio = change_tempo
     d_ratio = change_dynamics
+    a_ratio = change_art
     # change condition
     prev_note = None
     prev_new_note = None
@@ -1374,7 +1594,7 @@ def save_changed_midi(
         if change_tempo is not None:
             dur = note.end - note.start
             new_dur = dur * t_ratio
-            new_dur = np.clip(new_dur, 1e-3, 0.025)
+            new_dur = np.max([new_dur, 0.025])
             if prev_note is None: # first note
                 ioi, new_ioi = None, None
                 new_onset = note.start
@@ -1396,11 +1616,11 @@ def save_changed_midi(
         new_notes.append(new_note)
         prev_note = note
         prev_new_note = new_note
+
     # new midi
     midi_new = pretty_midi.PrettyMIDI(resolution=10000, initial_tempo=120) # new midi object
     inst_new = pretty_midi.Instrument(0) # new instrument object
-    inst_new.notes = make_midi_start_zero(new_notes)
-    midi_new.instruments.append(inst_new)               
+    inst_new.notes = make_midi_start_zero(new_notes)            
     # append new instrument
     midi_new.instruments.append(inst_new)
     midi_new.remove_invalid_notes()
@@ -1499,6 +1719,23 @@ def save_xml_to_midi(xml_path, save_path):
     # xml to midi notes
     midi_notes = xml_to_midi_notes(xml_notes)
     save_new_midi(midi_notes, new_midi_path=save_path, start_zero=False)
+
+def change_tempo_to_target(midi_from, midi_to):
+    midi_from = sorted(midi_from, key=lambda x: x.start)
+    midi_to = sorted(midi_to, key=lambda x: x.start)
+
+    max_len = np.max([n.end for n in midi_to])
+    cur_len = np.max([n.end for n in midi_from])
+    t_ratio = max_len / cur_len 
+
+    # mean_vel = np.mean([n.velocity for n in midi_to])
+    # cur_vel = np.mean([n.velocity for n in midi_from])
+    # d_ratio = mean_vel / cur_vel 
+
+    new_notes = save_changed_midi(
+        midi_from, savename=None, save=False, change_tempo=t_ratio)
+
+    return new_notes 
 
 def sort_pair(pairs, fmt=None):
     if fmt == "xml":

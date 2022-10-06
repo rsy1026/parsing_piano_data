@@ -349,9 +349,9 @@ def get_performance_num():
 def save_matched_files():
     # PARENT DIRECTORY
     # dirname = '/home/rsy/Dropbox/RSY/Piano/data/chopin_maestro/original'
-    dirname = '/data/chopin_cleaned/original'
+    # dirname = '/data/chopin_cleaned/original'
     # dirname = '/data/chopin_maestro/original'
-    # dirname = '/data/asap_dataset/exp_data/listening_test/raw'
+    dirname = '/data/asap_dataset/exp_data/listening_test/raw'
     program_dir = '/workspace/Piano/gen_task/match_score_midi'
     # get directory lists
     xml_list, score_midi_list, perform_midi_list = search(dirname)
@@ -522,7 +522,7 @@ def save_features_xml():
                 writer = csv.writer(open("./features_check_{}_{}_downbeat.csv".format(c_name, p_name), 'w'))
                 for row in csv_list:
                     writer.writerow(row)
-                cond_list = np.asarray(cond_list)
+                cond_list = np.asarray(cond_list, dtype=object)
 
                 np.save(os.path.join(piece, "cond.npy"), cond_list)
                 print()
@@ -592,7 +592,7 @@ def save_features_midi(mode=None):
     print("perform note number: {}".format(all_perform_num))
 
 def parse_test_cond(
-    pair=None, pair_path=None, small_ver=True, tempo=None, time_sig=None):
+    pair=None, pair_path=None, small_ver=True, tempo=None, time_sig=None, key_sig=None):
     if pair is not None:
         pairs = pair 
     elif pair is None and pair_path is not None:
@@ -619,7 +619,8 @@ def parse_test_cond(
                                   prev_measure=prev_xml_measure,
                                   note_ind=i,
                                   tempo=tempo,
-                                  time_sig=time_sig)
+                                  time_sig=time_sig,
+                                  key_sig=key_sig)
 
         _input = parsed_note._input
         
@@ -630,12 +631,12 @@ def parse_test_cond(
         prev_xml_note = parsed_note # InputFeatures object
         prev_xml_measure = parsed_note.measure # xml object
 
-    cond_list = np.asarray(cond_list)
+    cond_list = np.asarray(cond_list, dtype=object)
     cond_list = sorted(cond_list, key=lambda x: x[0])
     cond = np.asarray([c[1] for c in cond_list])
 
     if small_ver is True:
-        out = cond[:,19:] # w/o tempo(1)/beat(12)/dynamics(6)
+        out = cond[:,19:23] # w/o tempo(1)/beat(12)/dynamics(6)
     elif small_ver is False:
         out = cond
 
@@ -1015,455 +1016,6 @@ def parse_midi_features(
 
     return input_list, output_list
 
-def parse_midi_features_new(
-    pair_path=None, pairs_score=None, 
-    midi_path=None, midi_notes=None, tempo=None, same_onset_ind=None):
-
-    '''
-    * function for parsing MIDI features
-        - always parse in order of SCORE MIDI 
-    '''
-
-    ## FOR DEBUGGING ## 
-    # pair_path = '/data/chopin_cleaned/original/Chopin_Etude/10_1/01/xml_score_perform_pairs.npy'
-    # midi_path = '/data/chopin_cleaned/original/Chopin_Etude/10_1/score_plain.mid'
-    # pairs_score = None 
-    # midi_notes = None 
-    # tempo = 176
-
-    # pair_path = '/data/chopin_cleaned/original/Chopin_Etude/25_8/01/xml_score_perform_pairs.npy'
-    # midi_path = '/data/chopin_cleaned/original/Chopin_Etude/25_8/score_plain.mid'
-    # pairs_score = None 
-    # midi_notes = None 
-    # tempo = 176
-
-
-    # load pairs
-    if pair_path is not None:
-        pairs = np.load(pair_path, allow_pickle=True).tolist()
-        pairs_score = [p for p in pairs if p['score_midi'] is not None]
-        pairs_score = sorted(pairs_score, key=lambda x: x['score_midi'][0])
-    if pairs_score is not None:
-        pairs_score = pairs_score
-
-    # get first onsets
-    pairs_score_onset = make_onset_pairs(pairs_score)
-    first_onset_group = [n for n in pairs_score_onset[0] \
-        if n['perform_midi'] is not None]
-    
-    # if performed notes not matched
-    if len(first_onset_group) == 0:
-        # find first group with performed notes
-        o = 1
-        while len(first_onset_group) == 0: 
-            first_onset_group = [n for n in pairs_score_onset[o] \
-                if n['perform_midi'] is not None]
-            o += 1			
-
-        first_onset_perform = np.min(
-            [n['perform_midi'][1].start for n in first_onset_group])
-        first_onset_score = pairs_score_onset[0][0]['score_midi'][1].start
-
-        print("** first perform onset from next onsets: {}".format(
-            first_onset_perform))
-
-    elif len(first_onset_group) > 0:
-        first_onset_perform = np.min(
-            [n['perform_midi'][1].start for n in first_onset_group])
-        first_onset_score = first_onset_group[0]['score_midi'][1].start
-
-    # get score midi notes for check length
-    if midi_path is not None:
-        midi_notes, _ = extract_midi_notes(midi_path, clean=True)
-    if midi_notes is not None:
-        midi_notes = midi_notes
-
-    # set first onsets to 0 for score and perform
-    for note in pairs_score:
-        if note['perform_midi'] is not None:
-            note['perform_midi'][1].start -= first_onset_perform
-            note['perform_midi'][1].end -= first_onset_perform
-
-        if note['score_midi'] is not None:
-            note['score_midi'][1].start -= first_onset_score
-            note['score_midi'][1].end -= first_onset_score		
-
-    # parse features per note
-    input_list = list()
-    output_list = list()
-
-    base_onset_perform_list = list()
-    mean_onset_perform_list = list()
-    next_onset_perform_list = list()
-    note_list = list()
-    
-    prev_note = None
-    prev_mean_onset_score = None
-    prev_mean_onset_perform = None 
-
-    # make pairs in onset AGAIN --> time changed (- first onset)
-    pairs_onset = make_onset_pairs(pairs_score)
-
-    for i in range(len(pairs_score)):
-        # assign each pair
-        note = pairs_score[i]
-        note_ind = note['score_midi'][0]
-
-        # parse features for each note
-        parsed_note = MIDIFeatures(note=note,
-                                   prev_note=prev_note,
-                                   note_ind=note_ind,
-                                   tempo_=tempo)
-
-        if prev_note is None: # first note
-            '''
-            * assume the first note starts after 16th-length rest
-                -> since the first note also has micro-timing and non-zero onset
-            * same prev mean onset for score and perform
-            '''
-            prev_mean_onset_score = -parsed_note.dur_16th
-            prev_mean_onset_perform = -parsed_note.dur_16th
-
-        if parsed_note.is_same_onset is False: # different note group
-
-            # current onset -> find onset group having current note index
-            same_onset = [onset \
-                for onset in pairs_onset \
-                if note_ind == onset[0]['score_midi'][0]]
-            assert len(same_onset) == 1
-            same_onset = same_onset[0]
-            same_onset_values_perform = [o['perform_midi'][1].start \
-                for o in same_onset if o['perform_midi'] is not None]
-            # same_onset_perform = [o['perform_midi'] \
-                # for o in same_onset if o['perform_midi'] is not None]
-            # same_onset_perform = sorted(same_onset_perform, key=lambda x: x[1].pitch)
-            if len(same_onset_values_perform) == 0:
-                same_mean_onset_perform = None
-            elif len(same_onset_values_perform) > 0:
-                same_mean_onset_perform = np.mean(same_onset_values_perform) # mean
-                # same_mean_onset_perform = same_onset_perform[-1][1].start # highest voice
-            same_mean_onset_score = parsed_note.score_onset
-
-            '''
-            * next note to current group's last note 
-                is the first note of the next group
-            '''
-            same_onset_last_ind = same_onset[-1]['score_midi'][0]
-            last_pair_ind = pairs_score[-1]['score_midi'][0]
-
-            if same_onset_last_ind < last_pair_ind:
-                next_onset = [onset \
-                    for onset in pairs_onset \
-                    if same_onset_last_ind+1 == onset[0]['score_midi'][0]]
-                assert len(next_onset) == 1
-                next_onset = next_onset[0]
-                next_onset_values_perform = [o['perform_midi'][1].start \
-                    for o in next_onset if o['perform_midi'] is not None]	
-                # next_onset_perform = [o['perform_midi'] \
-                    # for o in next_onset if o['perform_midi'] is not None]
-                # next_onset_perform = sorted(next_onset_perform, key=lambda x: x[1].pitch)
-                if len(next_onset_values_perform) == 0:
-                    next_mean_onset_perform = None 
-                elif len(next_onset_values_perform) > 0:
-                    next_mean_onset_perform = np.mean(next_onset_values_perform) # mean
-                    # next_mean_onset_perform = next_onset_perform[-1][1].start # highest voice
-                next_mean_onset_score = next_onset[0]['score_midi'][1].start 	
-            
-            elif same_onset_last_ind == last_pair_ind: # last note group
-                next_onset = same_onset
-                next_onset_values_perform = [o['perform_midi'][1].end \
-                    for o in next_onset if o['perform_midi'] is not None]
-                if len(next_onset_values_perform) == 0:
-                    next_mean_onset_perform = None 
-                elif len(next_onset_values_perform) > 0:
-                    next_mean_onset_perform = np.max(next_onset_values_perform)
-                next_mean_onset_score = np.max([o['score_midi'][1].end \
-                    for o in next_onset]) # notes can have different offsets
-
-            # get current mean onset for the note group
-            mean_onset_score = same_mean_onset_score
-            mean_onset_perform = same_mean_onset_perform
-
-            # get previous mean onset for computing ioi (current - prev)
-            base_onset_score = prev_mean_onset_score
-            base_onset_perform = prev_mean_onset_perform
-
-            # get next mean onset for computing next ioi (next - current)
-            next_onset_score = next_mean_onset_score
-            next_onset_perform = next_mean_onset_perform
-            
-        elif parsed_note.is_same_onset is True: # same note group
-            mean_onset_score = mean_onset_score
-            mean_onset_perform = mean_onset_perform 
-            base_onset_score = base_onset_score	
-            base_onset_perform = base_onset_perform	
-            next_onset_score = next_onset_score	
-            next_onset_perform = next_onset_perform	
-
-        # gather onsets and note object
-        base_onset_perform_list.append(base_onset_perform)
-        mean_onset_perform_list.append(mean_onset_perform)
-        next_onset_perform_list.append(next_onset_perform)	
-        note_list.append(parsed_note)
-
-        # print()
-        # print(same_onset_values)
-        # print(base_onset_score, mean_onset_score, next_onset_score, parsed_note.is_same_onset)
-        # print(base_onset_perform, mean_onset_perform, next_onset_perform)
-
-        _input = parsed_note.get_input_features(
-            base_onset_score, next_onset_score)
-        parsed_note.get_ioi_ratio(
-            base_onset_perform, mean_onset_perform, next_onset_perform)
-        _output = parsed_note.ioi_ratio1
-        
-        # print(_output, parsed_note.is_same_onset)
-
-        input_list.append([note_ind, _input])
-        output_list.append([note_ind, _output])
-        # feature_list.append(parsed_note.ioi_units)
-        # print(parsed_note.score_dur)
-        
-        # update previous attributes
-        prev_note = parsed_note # MIDIFeatures object
-        prev_mean_onset_score = mean_onset_score 
-        prev_mean_onset_perform = mean_onset_perform
-
-    assert len(midi_notes) == len(output_list) == len(input_list)	
-
-    # to numpy array
-    input_list = np.array(input_list, dtype=object)
-    output_list = np.array(output_list, dtype=object)
-
-    inp = np.asarray([i[1] for i in input_list])
-    oup = np.asarray([o[1] for o in output_list])
-
-    # rearrange mean onsets
-    base_onsets = pdata.make_onset_based_pick(
-        inp, np.asarray(base_onset_perform_list), same_onset_ind=same_onset_ind)
-    mean_onsets = pdata.make_onset_based_pick(
-        inp, np.asarray(mean_onset_perform_list), same_onset_ind=same_onset_ind)
-    next_onsets = pdata.make_onset_based_pick(
-        inp, np.asarray(next_onset_perform_list), same_onset_ind=same_onset_ind)
-
-    assert np.array_equal(base_onsets[1:], mean_onsets[:-1])
-    assert np.array_equal(mean_onsets[1:], next_onsets[:-1])
-
-    # first cur onset ~ last next onset
-    # all_onsets = np.concatenate(
-    # 	[base_onsets[:1], mean_onsets, next_onsets[-1:]], axis=0)
-
-    # pool IOI1 ratio  
-    iois = pdata.make_onset_based_pick(inp, oup, same_onset_ind=same_onset_ind)
-    assert len(iois) == len(pairs_onset)
-    pooled_iois = moving_avr(iois, win_len=5, half=True)
-    pooled_iois = np.concatenate([pooled_iois, next_onsets[-1:]], axis=-1)
-    
-    # gaussian basis functions
-    # x = np.arange(len(pooled_iois)).reshape(-1, 1)
-    # y = pooled_iois.reshape(-1, 1)
-    # gauss_model = make_pipeline(GaussianFeatures(20),
-    # 							LinearRegression())
-    # gauss_model.fit(x, y)
-    # yfit = gauss_model.predict(x)
-    # curve_iois = yfit.reshape(-1,)	
-    # curve_iois = np.concatenate([curve_iois, next_onsets[-1:]], axis=-1)
-
-    dur_16th = parsed_note.dur_16th
-    tempo_ratio = parsed_note.tempo_ratio
-
-    new_output_list = list()
-    onset_num = 0
-    for i, note in enumerate(note_list):
-        # assert i == note.note_ind
-
-        if note.is_same_onset == 0: # False:
-            base_onset_perform2 = base_onsets[onset_num]
-            mean_onset_perform2 = mean_onsets[onset_num]
-            next_onset_perform2 = next_onsets[onset_num]
-            pooled_ioi = pooled_iois[onset_num]
-            next_pooled_ioi = pooled_iois[onset_num+1]
-            onset_num += 1
-
-        elif note.is_same_onset == 1: # same:
-            base_onset_perform2 = base_onset_perform2
-            mean_onset_perform2 = mean_onset_perform2
-            next_onset_perform2 = next_onset_perform2
-            pooled_ioi = pooled_ioi
-            next_pooled_ioi = next_pooled_ioi
-
-        _output2 = note.get_output_features(
-            base_onset_perform2, mean_onset_perform2, next_onset_perform2, pooled_ioi)
-        _output2[3] = float(pooled_ioi)
-        new_output_list.append([i, _output2])
-
-    assert onset_num == len(pairs_onset)
-    new_output_list = np.asarray(new_output_list)
-
-    ## for checking curve iois
-    # check_oup = np.asarray([n[1] for n in new_output_list])
-    # check_ioi = pdata.make_onset_based_pick(
-    # 	inp, check_oup[:,3], same_onset_ind=same_onset_ind)
-    # plt.figure()
-    # plt.plot(range(len(iois)), iois, label="orig_ioi")
-    # plt.plot(range(len(iois)), pooled_iois, label="pooled_ioi")
-    # plt.plot(range(len(iois)), curve_iois[:-1], label="curve_ioi")
-    # plt.plot(range(len(iois)), check_ioi, label="output_ioi")
-    # plt.legend()
-    # plt.savefig("check_curve_ioi.png")
-
-    return input_list, new_output_list
-
-def parse_midi_features_old(
-    pair_path=None, pairs_score=None, midi_path=None, midi_notes=None, tempo=None):
-
-    # load pairs
-    if pair_path is not None:
-        pairs = np.load(pair_path, allow_pickle=True).tolist()
-        pairs_score = [p for p in pairs if p['score_midi'] is not None]
-        pairs_score = sorted(pairs_score, key=lambda x: x['score_midi'][0])
-    if pairs_score is not None:
-        pairs_score = pairs_score
-
-    # get first onsets
-    pairs_score_onset = make_onset_pairs(pairs_score)
-    first_onset_group = [n for n in pairs_score_onset[0] \
-        if n['perform_midi'] is not None]
-    '''
-    make sure at least one note is in the first note group
-    '''
-    if len(first_onset_group) == 0:
-        o = 1
-        while len(first_onset_group) == 0:
-            first_onset_group = [n for n in pairs_score_onset[o] \
-                if n['perform_midi'] is not None]
-            o += 1			
-        print("** first perform onset from next onsets: {}".format(np.min(
-            [n['perform_midi'][1].start for n in first_onset_group])))
-
-        first_onset_perform = np.min(
-            [n['perform_midi'][1].start for n in first_onset_group])
-        first_onset_score = np.min(
-            [n['score_midi'][1].start for n in pairs_score_onset[0]])
-
-    elif len(first_onset_group) > 0:
-        first_onset_perform = np.min(
-            [n['perform_midi'][1].start for n in first_onset_group])
-        first_onset_score = np.min(
-            [n['score_midi'][1].start for n in first_onset_group])
-
-    # get score midi for check
-    # midi_path = os.path.join(player, 'score_plain.cleaned.mid')
-    if midi_path is not None:
-        midi_notes, _ = extract_midi_notes(midi_path, clean=True)
-    if midi_notes is not None:
-        midi_notes = midi_notes
-
-    input_list = list()
-    output_list = list()
-    onset_score_list = list()
-    onset_perform_list = list()
-    feature_list = list()
-
-    # set first onsets to 0 for score and perform
-    for note in pairs_score:
-        if note['perform_midi'] is not None:
-            note['perform_midi'][1].start -= first_onset_perform
-            note['perform_midi'][1].end -= first_onset_perform
-
-        if note['score_midi'] is not None:
-            note['score_midi'][1].start -= first_onset_score
-            note['score_midi'][1].end -= first_onset_score		
-
-    # parse features per note
-    prev_note = None
-    prev_mean_onset_score = None
-    prev_mean_onset_perform = None 
-    base_onset_score = None 
-    base_onset_perform = None
-    
-    for i in range(len(pairs_score)):
-        # assign each pair
-        note = pairs_score[i]
-
-        # parse features for each note
-        parsed_note = MIDIFeatures(note=note,
-                                   prev_note=prev_note,
-                                   note_ind=i,
-                                   tempo_=tempo)
-
-        if prev_note is None: # first note
-            '''
-            * assume the first note starts after 16th-length rest
-                -> since the first note also can have micro-timing and non-zero onset
-            * same mean onset for score and perform
-            '''
-            prev_mean_onset_score = -parsed_note.dur_16th
-            prev_mean_onset_perform = -parsed_note.dur_16th
-
-        if parsed_note.is_same_onset is False: # different note group
-
-            # gather the whole note group
-            same_onset = [[n['perform_midi'][0], n['perform_midi'][1].start] \
-                for n in pairs_score \
-                if Decimal(str(n['score_midi'][1].start)) == \
-                    Decimal(str(note['score_midi'][1].start)) \
-                    and n['perform_midi'] is not None] # [note index, onset time] 
-            same_onset_values = [float(v[1]) for v in same_onset if v is not None] # mean
-            # same_onset_values = sorted(same_onset, key=lambda x: x[0]) # for toppest voice
-
-            # get mean onset for the note group
-            if len(same_onset_values) == 0:
-                mean_onset_score = None
-                mean_onset_perform = None
-            elif len(same_onset_values) > 0:
-                mean_onset_score = parsed_note.score_onset
-                mean_onset_perform = np.mean(same_onset_values) # mean
-                # mean_onset_perform = float(same_onset_values[-1][1]) # toppest voice
-
-            # update previous mean onset for computing ioi (current - prev)
-            base_onset_score = prev_mean_onset_score
-            base_onset_perform = prev_mean_onset_perform
-            
-        elif parsed_note.is_same_onset is True: # same note group
-            mean_onset_score = mean_onset_score
-            mean_onset_perform = mean_onset_perform 
-            same_onset_values = same_onset_values
-            base_onset_score = base_onset_score	
-            base_onset_perform = base_onset_perform	
-
-        # gather for check
-        onset_perform_list.append(base_onset_perform)					
-
-        # print()
-        # print(same_onset_values)
-        # print(base_onset_score, mean_onset_score)
-        # print(base_onset_perform, mean_onset_perform)
-
-        _input = parsed_note.get_input_features(base_onset_score)
-        _output = parsed_note.get_output_features(base_onset_perform, mean_onset_perform)
-        
-        # print(_output, parsed_note.is_same_onset)
-
-        input_list.append([i, _input])
-        output_list.append([i, _output])
-        # feature_list.append(parsed_note.ioi_units)
-        # print(parsed_note.score_dur)
-        
-        # update previous attributes
-        prev_note = parsed_note # MIDIFeatures object
-        prev_mean_onset_score = mean_onset_score 
-        prev_mean_onset_perform = mean_onset_perform 
-        prev_same_onset_values = same_onset_values
-
-    assert len(midi_notes) == len(output_list) == len(input_list)	
-
-    # to numpy array
-    input_list = np.array(input_list, dtype=object)
-    output_list = np.array(output_list, dtype=object)
-
-    return input_list, output_list
-
 def parse_score_features(sub_notes, tempo=None, null_tempo=120):
     # parse features
     input_list = list()
@@ -1544,6 +1096,225 @@ def parse_score_features_simple(sub_notes):
     input_list = np.array(input_list)
     
     return input_list
+
+def parse_test_features(
+    xml, score, mode=None, measures=None,
+    tempo=None, null_tempo=None, same_onset_ind=None):
+
+    '''
+    * function for parsing MIDI features
+        - always parse in order of SCORE MIDI 
+    '''
+
+    ## FOR DEBUGGING ## 
+    # pair_path = '/data/chopin_cleaned/original/Chopin_Etude/10_1/02/xml_score_perform_pairs.npy'
+    # midi_path = '/data/chopin_cleaned/original/Chopin_Etude/10_1/score_plain.mid'
+    # pairs_score = None 
+    # midi_notes = None 
+    # tempo = 176
+
+    # pair_path = '/data/chopin_cleaned/original/Chopin_Etude/10_8/03/xml_score_perform_pairs.npy'
+    # xml = '/data/chopin_cleaned/original/Chopin_Etude/10_8/musicxml_cleaned_plain.musicxml'
+    # pair_path = '/data/chopin_cleaned/original/Chopin_Berceuse/57/02/xml_score_perform_pairs.npy'
+    # xml = '/data/chopin_cleaned/original/Chopin_Berceuse/57/musicxml_cleaned_plain.musicxml'
+        
+    # xml = '/data/pianotab/original/starwars.musicxml'
+    # score = '/data/pianotab/original/starwars.mid'
+
+    # tempo, time_sig, key_sig = get_signatures_from_xml(xml, measure_start=0)
+    # pairs_score = None 
+    # midi_notes = None
+    # null_tempo = 120
+    # mode = "note" 
+
+    ###################
+
+    match = MATCH(
+        current_dir=os.getcwd(),
+        program_dir="/workspace/Piano/gen_task/match_score_midi")
+
+    pairs = match.align_xml_midi(
+        xml, score, performs=None, corresps=None, 
+        save_pairs=None, plain=True, plot=None)
+
+    pairs_score_all = [p for p in pairs if p['xml_note'] is not None and \
+        p['xml_note'][1].is_grace_note is False]
+    pairs_score_all = sorted(pairs_score_all, key=lambda x: x['xml_note'][0])
+
+    if measures is not None:
+        start_measure, end_measure = measures[0]-1, measures[1]-1
+        pairs_score = list()
+        for note in pairs_score_all:
+            measure_num = note['xml_note'][1].measure_number
+            if measure_num >= start_measure and measure_num <= end_measure:
+                pairs_score.append(note)
+        pairs_score = sorted(pairs_score, key=lambda x: x['xml_note'][0])
+        # note_ind = [n['score_midi'][0] for n in pairs_score]
+
+    # get first onsets
+    pairs_score_onset = make_onset_pairs(pairs_score, fmt="xml")
+    first_onset_score = np.min(
+        [n['xml_note'][1].note_duration.time_position \
+            for n in pairs_score_onset[0]])
+
+    # print("** first perform onset: {:.4f}".format(first_onset_perform))
+    # print("** first score onset: {:.4f}".format(first_onset_score))
+
+    # get score midi for check
+    # if midi_path is not None:
+    #     midi_notes, _ = extract_midi_notes(midi_path, clean=True)
+    # if midi_notes is not None:
+    #     midi_notes = midi_notes
+
+    # set first onsets to 0 for score and perform
+    for note in pairs_score:
+        if note['xml_note'] is not None:
+            note['xml_note'][1].note_duration.time_position -= first_onset_score
+
+    # parse features per note
+    input_list = list()
+    note_list = list()
+    onset_score_list = list()
+    base_onset_list = list()
+    mean_onset_list = list()
+    next_onset_list = list()
+    
+    prev_note = None
+    prev_mean_onset_score = None
+
+    # make pairs in onset AGAIN --> time changed (- first onset)
+    # just for sure
+    pairs_onset = make_onset_pairs(pairs_score, fmt="xml")
+
+    for i in range(len(pairs_score)):
+        # assign each pair
+        note = pairs_score[i]
+
+        if i < len(pairs_score)-1:
+            next_note = pairs_score[i+1]
+        elif i == len(pairs_score):
+            next_note = None
+        note_ind = note['xml_note'][0]  
+
+        # parse features for each note
+        parsed_note = MIDIFeatures_test(note=note, 
+                                        prev_note=prev_note, 
+                                        next_note=next_note,
+                                        note_ind=note_ind,
+                                        tempo_=tempo,
+                                        fmt="xml",
+                                        null_tempo=120)
+                 
+
+        if prev_note is None: # first note
+            '''
+            * assume the first note starts after 16th-length rest
+                -> since the first note also has micro-timing and non-zero onset
+            * same prev mean onset for score and perform
+            '''
+            prev_mean_onset_score = -parsed_note.dur_16th
+
+        if parsed_note.is_same_onset is False: # different note group
+
+            # current onset -> find onset group having current note index
+            same_onset = [onset for onset in pairs_onset \
+                if note_ind == onset[0]['xml_note'][0]]
+            assert len(same_onset) == 1
+            same_onset = same_onset[0]
+            same_mean_onset_score = parsed_note.score_onset
+
+            '''
+            * next note to current group's last note 
+                is the first note of the next group
+            '''
+            same_onset_last_ind = same_onset[-1]['xml_note'][0]
+            last_pair_ind = pairs_score[-1]['xml_note'][0]
+
+            if same_onset_last_ind < last_pair_ind:
+                next_onset = list()
+                n = 1
+                while len(next_onset) == 0: # find next note group
+                    for onset in pairs_onset:
+                        if same_onset_last_ind+n in [o['xml_note'][0] for o in onset]:
+                            next_onset.append(onset) 
+                    n += 1
+                assert len(next_onset) == 1 # next_onset is always length 1
+                next_onset = next_onset[0]
+                next_mean_onset_score = next_onset[0]['xml_note'][1].note_duration.time_position
+            
+            elif same_onset_last_ind == last_pair_ind: # if last note group
+                next_onset = same_onset
+                next_mean_onset_score = np.max([o['xml_note'][1].note_duration.time_position + \
+                    o['xml_note'][1].note_duration.seconds \
+                    for o in next_onset]) # notes can have different offsets within group
+
+            # get current mean onset for the note group
+            mean_onset_score = same_mean_onset_score
+
+            # get previous mean onset for computing ioi (current - prev)
+            base_onset_score = prev_mean_onset_score
+
+            # get next mean onset for computing next ioi (next - current)
+            next_onset_score = next_mean_onset_score
+            
+        elif parsed_note.is_same_onset is True: # same note group
+            mean_onset_score = mean_onset_score
+            base_onset_score = base_onset_score
+            next_onset_score = next_onset_score
+
+        # gather onsets and note object
+        base_onset_list.append(float(base_onset_score))
+        mean_onset_list.append(float(mean_onset_score))
+        next_onset_list.append(float(next_onset_score))	
+        note_list.append([note_ind, parsed_note])
+
+        # print()
+        # print(same_onset_values)
+        # print("{},{},{},{},".format(
+            # parsed_note.is_same_onset, base_onset_perform, mean_onset_perform, next_onset_perform))
+
+        _input = parsed_note.get_input_features(
+            base_onset_score, next_onset_score)
+
+
+        # print(_output, parsed_note.is_same_onset)
+        # if parsed_note.ioi_ratio2 <= 0 or parsed_note.ioi_ratio1 <= 0:
+        #     print(base_onset_score, mean_onset_score, next_onset_score, parsed_note.is_same_onset)
+        #     print(parsed_note.score_ioi_norm1)
+        #     print()
+        #     break
+
+        input_list.append([note_ind, _input])
+        
+        # update previous attributes
+        prev_note = parsed_note # MIDIFeatures object
+        prev_mean_onset_score = mean_onset_score
+
+    assert len(note_list) == len(input_list)	
+
+    input_list = sorted(input_list, key=lambda x: x[0])
+    note_list = sorted(note_list, key=lambda x: x[0])
+    inp_ind = sorted([i[0] for i in input_list])
+    note_ind = sorted([i[0] for i in note_list])
+
+    # to numpy array
+    input_list = np.array(input_list, dtype=object)
+    inp = np.asarray([i[1] for i in input_list])
+
+    # rearrange mean onsets
+    base_onsets = pdata.make_onset_based_pick(
+        inp, np.asarray(base_onset_list), same_onset_ind=same_onset_ind)
+    mean_onsets = pdata.make_onset_based_pick(
+        inp, np.asarray(mean_onset_list), same_onset_ind=same_onset_ind)
+    next_onsets = pdata.make_onset_based_pick(
+        inp, np.asarray(next_onset_list), same_onset_ind=same_onset_ind)
+
+    assert np.array_equal(base_onsets[1:], mean_onsets[:-1])
+    assert np.array_equal(mean_onsets[1:], next_onsets[:-1])
+
+
+    return inp, pairs_score, note_ind
+
 
 def parse_test_x_features(
     score=None, xml=None, tempo=None, null_tempo=120, 
@@ -2553,6 +2324,7 @@ class MIDIFeatures(object):
             print(self.dur_ratio, self.perform_dur, self.score_dur_norm)
             raise AssertionError
 
+
 class MIDIFeatures_test(MIDIFeatures):
     def __init__(self, 
                  note=None, 
@@ -2560,7 +2332,7 @@ class MIDIFeatures_test(MIDIFeatures):
                  next_note=None,
                  note_ind=None,
                  tempo_=None,
-                 fmt="mid",
+                 fmt="xml",
                  null_tempo=120):
 
         # Inputs
@@ -2571,6 +2343,15 @@ class MIDIFeatures_test(MIDIFeatures):
         self.next_note = next_note
         self.note_ind = note_ind
         self.tempo = tempo_
+
+        if fmt == "xml":
+            self.score_note = note['xml_note'][1]
+            self.next_note = next_note['xml_note'][1]
+        elif fmt == "mid":
+            self.score_note = note['score_midi'][1]
+            self.next_note = next_note['score_midi'][1]
+        # self.xml_note = note['xml_note'][1]
+        assert self.note['xml_note'][1].is_grace_note is False
 
         # Features to parse
         self.prev_score_note = None
@@ -2620,69 +2401,6 @@ class MIDIFeatures_test(MIDIFeatures):
         super().input_to_vector_16()
         return self._input	
 
-class MIDIFeatures_test2(MIDIFeatures):
-    def __init__(self, 
-                 note=None, 
-                 prev_note=None, 
-                 next_note=None,
-                 note_ind=None,
-                 tempo_=None,
-                 null_tempo=120):
-
-        # Inputs
-        self.note = note
-        self.score_note = note
-        self.prev_note = prev_note
-        self.next_note = next_note
-        self.note_ind = note_ind
-        self.tempo = tempo_
-
-        # Features to parse
-        self.prev_score_note = None
-        self.is_same_onset = None
-        self.is_top = None
-        self.score_onset = None
-        self.score_offset = None
-        self.score_dur = None
-        self.score_ioi = None
-        self.ioi_units = None
-        self.dur_units = None
-        self.ioi_class = None
-        self.dur_class = None
-        self.base_onset_score = None 
-        self.null_tempo = null_tempo
-        self.dur_16th = None
-        self.dur_32th = None
-        self.dur_48th = None
-        self.tempo_ratio = None
-        self._input = None
-
-        # Functions		
-        if self.prev_note is not None:
-            self.get_prev_attributes()
-        self.get_tempo_attributes()
-        super().get_score_attributes() # onset/offset/dur
-
-    def get_prev_attributes(self):
-        pass
-
-    def get_tempo_attributes(self):
-        self.tempo = Decimal(self.tempo)
-        self.dur_quarter = round(Decimal(60) / self.tempo, 3) # BPM
-        self.dur_16th = self.dur_quarter / Decimal(4)
-        self.dur_32th = self.dur_16th / Decimal(2)
-        self.dur_48th = self.dur_quarter / Decimal(12) # 12 for one quarter
-        self.tempo_ratio = self.tempo / Decimal(self.null_tempo)
-
-    def get_input_features(self, onset_for_ioi, next_onset_for_ioi):
-        super().get_score_ioi(onset_for_ioi, next_onset_for_ioi)
-        super().get_score_duration()
-        super().get_ioi_class2()
-        super().get_dur_class2()
-        super().get_pitch()
-        super().get_top_voice()
-        super().input_to_vector2()
-        return self._input	
 
 class MIDIFeatures_simple(MIDIFeatures):
     def __init__(self, 
@@ -2718,7 +2436,8 @@ class XMLFeatures(object):
                  prev_measure=None,
                  note_ind=None,
                  tempo=None,
-                 time_sig=None):
+                 time_sig=None,
+                 key_sig=None):
 
         # Inputs
         self.note = note # xml note
@@ -2728,6 +2447,7 @@ class XMLFeatures(object):
         self.note_ind = note_ind
         self.tempo = tempo
         self.time_sig = time_sig
+        self.key_sig = key_sig
         # self.prev_wedge_in_middle = prev_wedge_in_middle
         # self.cresc_in_word = cresc_in_word # on-going cresc word 
         # self.dim_in_word = dim_in_word # on-going dim word 
@@ -2754,6 +2474,8 @@ class XMLFeatures(object):
         self.beat = None
         self.is_downbeat = None
         self.is_grace_note = None
+        self.time_num = None 
+        self.time_denom = None
         # self.accent = {'none': None, 'accent': None, 'strong_accent': None}
         # self.staccato = {'none': None, 'staccato': None, 'strong_staccato': None}
         # self.is_arpeggiate = None
@@ -2870,12 +2592,13 @@ class XMLFeatures(object):
                 if self.time_signature_cand.numerator > 12 or \
                     self.time_signature_cand.denominator > 12: # error
                     if self.prev_note is not None:
-                        print('> using previous time signature instead of current: {}'.format(
-                            self.time_signature_cand))
-                        print('     --> {}'.format(self.prev_note.time_signature))
+                        # print('> using previous time signature instead of current: {}'.format(
+                            # self.time_signature_cand))
+                        # print('     --> {}'.format(self.prev_note.time_signature))
                         self.time_signature = self.prev_note.time_signature
                     elif self.prev_note is None:
-                        raise AssertionError("** numerator or denominator larger than 12 -> no time signature!")   
+                        self.time_signature = self.time_signature_cand
+                        # raise AssertionError("** numerator or denominator larger than 12 -> no time signature!")   
                 elif self.time_signature_cand.numerator <= 12 and \
                     self.time_signature_cand.denominator <= 12:
                     self.time_signature = self.time_signature_cand
@@ -2891,13 +2614,63 @@ class XMLFeatures(object):
             # find corresponding time signature among multiple candidates
             for each_time_sig in self.time_sig:
                 if self.measure_number >= each_time_sig[0]:
-                    self.time_signature = each_time_sig[1]
+                    self.time_signature_cand = each_time_sig[1]
                     break
-            assert self.time_signature is not None
+            assert self.time_signature_cand is not None
+
+            if self.time_signature_cand.numerator > 12 or \
+                self.time_signature_cand.denominator > 12: # error
+                if self.prev_note is not None:
+                    # print('> using previous time signature instead of current: {}'.format(
+                        # self.time_signature_cand))
+                    # print('     --> {}'.format(self.prev_note.time_signature))
+                    self.time_signature = self.prev_note.time_signature
+                elif self.prev_note is None:
+                    self.time_signature = self.time_signature_cand
+                    # raise AssertionError("** numerator or denominator larger than 12 -> no time signature!")   
+            elif self.time_signature_cand.numerator <= 12 and \
+                self.time_signature_cand.denominator <= 12:
+                self.time_signature = self.time_signature_cand
+
 
         # get key signature 
-        if self.measure.key_signature is not None:
-            self.key_signature = self.measure.key_signature
+        if self.key_sig is None:
+            if self.measure.key_signature is not None:
+                self.key_signature = self.measure.key_signature
+                key_str = str(self.key_signature)
+                key_root = key_str.split(' ')[0]
+                key_mode = key_str.split(' ')[1] 
+                fifth1 = np.asarray(['C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#', 'Ab', 'Eb', 'Bb', 'F'])
+                fifth2 = np.asarray(['C', 'G', 'D', 'A', 'E', 'Cb', 'Gb', 'Db', 'Ab', 'Eb', 'Bb', 'F'])
+                
+                if key_mode == 'major':
+                    if key_root in fifth1:
+                        num_acc = np.where(fifth1 == key_root)[0][0]
+                    elif key_root in fifth2:
+                        num_acc = np.where(fifth2 == key_root)[0][0]
+                elif key_mode == 'minor':
+                    if key_root in fifth1:
+                        num_acc = (np.where(fifth1 == key_root)[0][0] + 3) % 12
+                    elif key_root in fifth2:
+                        num_acc = (np.where(fifth2 == key_root)[0][0] + 3) % 12
+                self.num_acc = num_acc
+
+            elif self.measure.key_signature is None:
+                if self.prev_note is not None:
+                    self.key_signature = self.prev_note.key_signature
+                    self.key_sig = self.prev_note.key_sig
+                elif self.prev_note is None:
+                    raise AssertionError("** no key signature!")
+
+        elif self.key_sig is not None:
+            assert len(self.key_sig.shape) == 2
+            # find corresponding time signature among multiple candidates
+            for each_key_sig in self.key_sig:
+                if self.measure_number >= each_key_sig[0]:
+                    self.key_signature = each_key_sig[1]
+                    break
+            assert self.key_signature is not None
+
             key_str = str(self.key_signature)
             key_root = key_str.split(' ')[0]
             key_mode = key_str.split(' ')[1] 
@@ -2914,14 +2687,8 @@ class XMLFeatures(object):
                     num_acc = (np.where(fifth1 == key_root)[0][0] + 3) % 12
                 elif key_root in fifth2:
                     num_acc = (np.where(fifth2 == key_root)[0][0] + 3) % 12
-            self.key_sig = num_acc
+            self.num_acc = num_acc
 
-        elif self.measure.key_signature is None:
-            if self.prev_note is not None:
-                self.key_signature = self.prev_note.key_signature
-                self.key_sig = self.prev_note.key_sig
-            elif self.prev_note is None:
-                raise AssertionError("** no key signature!")
 
         # if current measure contains any directions
         if len(self.measure.directions) > 0:
@@ -3012,11 +2779,11 @@ class XMLFeatures(object):
         # time signature 
         _num = np.zeros([12,])
         _denom = np.zeros([12,])
-        _num[self.time_signature.numerator-1] = 1 
-        _denom[self.time_signature.denominator-1] = 1
+        _num[self.time_num-1] = 1 
+        _denom[self.time_denom-1] = 1
         # key signature 
         _key = np.zeros([12,])
-        _key[self.key_sig] = 1
+        _key[self.num_acc] = 1
         # onset
         # _same_onset = np.zeros([2,])	
         # if self.same_onset['start'] == 1:
@@ -3096,7 +2863,7 @@ class XMLFeatures(object):
         if self.prev_note is None:
             self.ioi = 0 
         elif self.prev_note is not None:
-            if self.same_onset['start'] == 1 and self.is_grace_note is 0:
+            if self.same_onset['start'] == 1 and self.is_grace_note == 0:
                 self.ioi = self.xml_position - self.prev_xml_position
             else:
                 self.ioi = self.prev_note.ioi
@@ -3109,7 +2876,7 @@ class XMLFeatures(object):
         if self.is_downbeat == 1: # if start of measure (not grace note)
             self.in_measure_pos = 0
         elif self.is_downbeat == 0:
-            if self.same_onset['start'] == 1 and self.is_grace_note is 0: # only if not grace note
+            if self.same_onset['start'] == 1 and self.is_grace_note == 0: # only if not grace note
                 self.in_measure_pos += self.ioi
             else:
                 self.in_measure_pos = self.in_measure_pos 
@@ -3118,8 +2885,26 @@ class XMLFeatures(object):
         denom = self.time_signature.denominator # beat type (4 in 2/4)
         self.time_signature_text = "{}/{}".format(num, denom)
         if num > 12 or denom > 12:
-            print("time sig larger than 12! --> {}".format([num, denom]))
-            raise AssertionError
+            # raise AssertionError
+            '''
+            the denominator is typically a power of 2
+            if denom > 12, maybe denom is one of 16, 32, ..., etc
+            '''
+            orig_num, orig_denom = copy.deepcopy(num), copy.deepcopy(denom)
+            while num > 12 or denom > 12:
+                if num % 2 == 0 and denom % 2 == 0:
+                    denom = denom // 2
+                    num = num // 2 
+                else:
+                    # print("time sig larger than 12! --> {}".format([num, denom]))
+                    raise AssertionError
+            # print("time sig {} --> {}".format([orig_num, orig_denom], [num, denom]))
+        
+        else:
+            pass
+
+        self.time_num = num 
+        self.time_denom = denom   
 
         if self.prev_note is None:
             self.beat = 0 # first beat

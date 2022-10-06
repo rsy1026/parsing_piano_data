@@ -334,13 +334,16 @@ def make_pianoroll(notes, start=None, maxlen=None,
         
     return roll, onset_list, onset_roll
 
-def pianoroll_to_notes(roll, time_unit=0.125, scale_pitch=21, vel=False, onset=True):
+def pianoroll_to_notes(roll, time_unit=0.125, 
+    scale_pitch=21, vel_from_roll=False, vel=64, onset=True):
     '''
-    time_unit: time duration per frame
+    unit: time duration per frame
     '''
     if onset is True:
         assert len(np.unique(roll)) > 2, "** Onset True but it's binary roll!"
 
+    unit = time_unit
+    
     note_list = list()
     note_dict = dict()
     for d in range(roll.shape[1]):
@@ -385,9 +388,9 @@ def pianoroll_to_notes(roll, time_unit=0.125, scale_pitch=21, vel=False, onset=T
                         start = note_dict[p][0]
                         end = start + dur * unit 
                         pitch = p + scale_pitch
-                        if vel is False:
-                            vel = 64
-                        elif vel is True:
+                        if vel_from_roll is False:
+                            vel = vel
+                        elif vel_from_roll is True:
                             vel = frame[p]
                         # new note
                         midi_note = pretty_midi.containers.Note(
@@ -410,9 +413,9 @@ def pianoroll_to_notes(roll, time_unit=0.125, scale_pitch=21, vel=False, onset=T
                             start = note_dict[p][0]
                             end = start + dur * unit
                             pitch = p + scale_pitch
-                            if vel is False:
-                                vel = 64
-                            elif vel is True:
+                            if vel_from_roll is False:
+                                vel = vel
+                            elif vel_from_roll is True:
                                 vel = frame[p]
                             # new note
                             midi_note = pretty_midi.containers.Note(
@@ -425,14 +428,6 @@ def pianoroll_to_notes(roll, time_unit=0.125, scale_pitch=21, vel=False, onset=T
     note_list = sorted(note_list, key=lambda x: x.start)
     return note_list
                                                     
-
-
-
-
-
-
-
-
 def check_note_measure_pair(xml_notes, xml_measures):
     for n, m in zip(xml_notes, xml_measures):
         n_num = n.measure_number

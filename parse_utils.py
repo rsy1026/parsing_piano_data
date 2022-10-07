@@ -266,6 +266,17 @@ def quantize(x, unit=None):
         x_new = x_prev
     return float(x_new)
 
+def quantize_by_time(x, base):
+    '''
+    x: target time
+    base: sequence of standards to quantize
+    '''
+    diff = np.abs(base - np.repeat(x, (len(base),)))
+    min_diff = np.where(diff==np.min(diff))[0][0]
+    x_new = base[min_diff]
+
+    return float(x_new)
+
 def quantize_to_sample(value, unit):
     quantized = quantize(np.round(value, 3), unit=unit)
     sample = int(quantized // unit)
@@ -276,7 +287,56 @@ def quantize_to_frame(value, unit):
     sample = int(round(Decimal(str(value / unit))))
     return sample
 
-def make_pianoroll(notes, start=None, maxlen=None, 
+def quantize_notes(notes, standard):
+    for note in notes:
+        new_start = quantize_by_time(note.start, standard)
+        note.start = new_start
+    return notes
+
+def quantize_by_onset(mid, orig_notes):
+    notes = copy.deepcopy(orig_notes)
+    wav = convert_to_wav(mid, return_wavname=True)
+    y, sr = librosa.load(wav)
+    hop = 512
+    # peak detection
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop, aggregate=np.median)
+    # peaks = librosa.onset.onset_detect(y=y, sr=sr, units='time') # 'time, frames'
+    peaks = librosa.util.peak_pick(onset_env, pre_max=3, post_max=3, pre_avg=3, post_avg=5, delta=0.5, wait=10)
+    tempo, beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
+    time_unit = (1/sr)*hop
+    peaks_time = peaks * time_unit
+    new_notes = quantize_notes(notes, peaks_time)
+
+    # remove wav
+    os.remove(wav)
+
+    # plt.figure(figsize=(50,7))
+    # plt.subplot(211)
+    # plt.plot(range(len(onset_env)), onset_env)
+    # plt.vlines(peaks, ymin=0, ymax=onset_env.max(), colors='r', linewidth=0.5)
+    # # plt.vlines(beats, ymin=0, ymax=onset_env.max(), colors='r', linewidth=0.5)
+    # plt.xlim([0,len(onset_env)])
+    # plt.subplot(212)
+    # D = np.abs(librosa.stft(y))
+    # plt.imshow(librosa.amplitude_to_db(D, ref=np.max), aspect='auto')
+    # plt.vlines(peaks, ymin=0, ymax=D.shape[0], colors='y', linewidth=0.5)
+    # # plt.vlines(beats, ymin=0, ymax=D.shape[0], colors='r', linewidth=0.5)
+    # plt.savefig("wav_beat5_2.png")
+
+    # peaks = librosa.util.peak_pick(iois, pre_max=3, post_max=3, pre_avg=3, post_avg=3, delta=0.05, wait=1)
+    # peak_notes = [notes[i-1] for i in peaks]
+    # peak_onsets = [quantize_to_frame(n.start, unit=unit) for n in peak_notes]
+    # roll, _, _ = make_pianoroll(notes, value=est_tempi, unit=unit, start=0.)
+
+    # plt.figure(figsize=(50,5))
+    # plt.imshow(roll, aspect='auto', interpolation='none')
+    # plt.vlines(peak_onsets, ymin=0, ymax=88, colors='r', linewidth=0.5)
+    # plt.savefig("roll_ex.png")
+    return new_notes, peaks, beats, time_unit
+
+
+
+def make_pianoroll(notes, value=None, start=None, maxlen=None, 
     start_pitch=21, num_pitch=88,
     unit=None, front_buffer=0., back_buffer=0., cut_end=True):
     '''
@@ -287,11 +347,17 @@ def make_pianoroll(notes, start=None, maxlen=None,
     # unit = float(round(Decimal(str(unit)), 3))
     if start is None:
         start = np.min([n.start for n in notes])
+    else:
+        start = start 
+
     if maxlen is None:
-        min_ = np.min([n.start for n in notes])
+        min_ = start
         max_ = np.max([n.end for n in notes])
         maxlen = max_ - min_
         maxlen = quantize_to_frame(maxlen, unit=unit) 
+
+    if value is not None:
+        assert len(value) == len(notes)
 
     front_buffer_sample = quantize_to_frame(front_buffer, unit=unit)
     back_buffer_sample = quantize_to_frame(back_buffer, unit=unit)
@@ -301,7 +367,7 @@ def make_pianoroll(notes, start=None, maxlen=None,
 
     onset_list = list()
     offset_list = list()
-    for n in notes:
+    for i, n in enumerate(notes):
         pitch = n.pitch - start_pitch
         if n.pitch >= 70: # right-hand(temporary)
             hand = 0
@@ -317,11 +383,17 @@ def make_pianoroll(notes, start=None, maxlen=None,
             n.start - start + front_buffer, unit=unit)  
         offset = onset + dur  
         vel = n.velocity
+        if value is not None:
+            vel = value[i]
+        else:
+            vel = vel
         onset_list.append([hand, onset])
         offset_list.append([hand, offset]) 
 
         # if onset < maxlen:  
-        assert onset < maxlen
+        if onset >= maxlen: 
+            print(onset, maxlen)
+            raise AssertionError
         roll[pitch, onset:offset] = vel
         onset_roll[pitch, onset] = offset - onset
             
@@ -807,8 +879,9 @@ def erase_track_prettyMIDI(filepath, erase_ind=None):
     return PM
 
 
-def get_cleaned_midi(filepath, no_vel=None, no_pedal=None, erase_track=None):
-    filename = os.path.basename(filepath).split('.')[0]
+def get_cleaned_midi(filepath, no_vel=None, no_pedal=None, no_perc=True, erase_track=None):
+    # filename = os.path.basename(filepath).split('.')[0]
+    filename = filepath
     if erase_track is not None:
         midi = erase_track_prettyMIDI(filepath, erase_ind=erase_track)
     else:
@@ -819,6 +892,8 @@ def get_cleaned_midi(filepath, no_vel=None, no_pedal=None, erase_track=None):
     min_pitch, max_pitch = 21, 108
     orig_note_num = 0
     for inst in midi.instruments: # existing object from perform midi
+        if no_perc is True and inst.is_drum is True:
+            continue
         for note in inst.notes:
             if note.pitch >= min_pitch and note.pitch <= max_pitch:
                 inst_new.notes.append(note)
@@ -843,15 +918,24 @@ def get_cleaned_midi(filepath, no_vel=None, no_pedal=None, erase_track=None):
     return midi_new
 
 def extract_midi_notes(
-    midi_path, clean=False, erase_track=None, inst_num=None, 
+    midi_path, clean=False, erase_track=None, inst_num=None, no_perc=False,
     no_pedal=False, raw=False, save=False, savepath=None):
+
+    try:
+        midi_obj_init = pretty_midi.PrettyMIDI(midi_path)
+    except:
+        # raise AssertionError("** Error in loading {}".format(midi_path))
+        return None, None
+    if len(midi_obj_init.instruments) == 0: # wrong file
+        return None, None
+
     if clean is False:
         midi_obj = get_cleaned_midi(
-            midi_path, no_vel=False, no_pedal=no_pedal, erase_track=erase_track)
+            midi_path, no_vel=False, no_pedal=no_pedal, no_perc=no_perc, erase_track=erase_track)
 
     elif clean is True:
         midi_obj = get_cleaned_midi(
-            midi_path, no_vel=True, no_pedal=True, erase_track=erase_track)
+            midi_path, no_vel=True, no_pedal=True, no_perc=no_perc, erase_track=erase_track)
 
     midi_notes = list()
     ccs = list()
@@ -874,7 +958,9 @@ def extract_midi_notes(
         midi_notes_ = midi_notes
     midi_notes_.sort(key=lambda x: x.pitch)
     midi_notes_.sort(key=lambda x: x.start)
-    
+    if len(ccs) > 0:
+        ccs.sort(key=lambda x: x.time)
+
     if len(midi_notes) != len(midi_notes_):
         print("cleaned duplicated notes: {}/{}".format(
             len(midi_notes_), len(midi_notes)))
@@ -1558,7 +1644,7 @@ def save_new_midi(notes, ccs=None, new_midi_path=None, initial_tempo=120, progra
     new_obj.instruments.append(new_inst)
     new_obj.write(new_midi_path)
 
-def make_midi_start_zero(notes):
+def make_midi_start_zero(notes, ccs=None):
     notes_start = np.min([n.start for n in notes])
     new_notes = list()
     for note in notes:
@@ -1569,10 +1655,32 @@ def make_midi_start_zero(notes):
                                                start=new_onset,
                                                end=new_offset)  
         new_notes.append(new_note)
-    return new_notes    
 
-def save_changed_midi(
-    notes, savename=None, save=True, change_tempo=None, change_art=None, change_dynamics=None):
+    if ccs is not None:
+        new_ccs = list()
+        for cc in ccs:
+            new_time = cc.time - notes_start
+            new_cc = pretty_midi.containers.ControlChange(number=cc.number,
+                                                          value=cc.value,
+                                                          time=new_time)  
+            new_ccs.append(new_cc)
+
+        return new_notes, new_ccs 
+    else:
+        return new_notes  
+
+
+def transpose(notes, transpose=None):
+    '''transpose=[sign][int]'''
+
+    for note in notes:
+        note.pitch = copy.deepcopy(note.pitch) + transpose
+
+    return notes
+
+
+def change_midi(
+    notes, ccs, savename=None, save=True, change_tempo=None, change_art=None, change_dynamics=None):
     # load midi notes
     # notes, _ = extract_midi_notes(filepath, clean=False)
     t_ratio = change_tempo
@@ -1592,8 +1700,8 @@ def save_changed_midi(
             new_dur = np.max([new_dur, 0.025])
             if prev_note is None: # first note
                 ioi, new_ioi = None, None
-                new_onset = note.start
-                new_offset = note.start + new_dur
+                new_onset = note.start * t_ratio
+                new_offset = new_onset + new_dur
             elif prev_note is not None:
                 ioi = note.start - prev_note.start
                 new_ioi = ioi * t_ratio 
@@ -1612,10 +1720,30 @@ def save_changed_midi(
         prev_note = note
         prev_new_note = new_note
 
+    # change ccs
+    prev_cc = None 
+    new_ccs = list()
+    for cc in ccs:
+        if change_tempo is not None:
+            if prev_cc is None:
+                new_cc_time = cc.time * t_ratio 
+            else:
+                cc_dur = cc.time - prev_cc.time
+                new_cc_dur = cc_dur * t_ratio 
+                new_cc_time = prev_new_cc.time + new_cc_dur 
+        new_cc = pretty_midi.containers.ControlChange(number=cc.number,
+                                                      value=cc.value,
+                                                      time=new_cc_time)
+        new_ccs.append(new_cc)
+        prev_cc = cc
+        prev_new_cc = new_cc
+
     # new midi
     midi_new = pretty_midi.PrettyMIDI(resolution=10000, initial_tempo=120) # new midi object
     inst_new = pretty_midi.Instrument(0) # new instrument object
-    inst_new.notes = make_midi_start_zero(new_notes)            
+    new_notes, new_ccs = make_midi_start_zero(new_notes, new_ccs)
+    inst_new.notes = new_notes 
+    inst_new.control_changes = new_ccs         
     # append new instrument
     midi_new.instruments.append(inst_new)
     midi_new.remove_invalid_notes()
@@ -1623,7 +1751,7 @@ def save_changed_midi(
     if save is True:
         midi_new.write(savename)
     
-    return inst_new.notes
+    return inst_new.notes, inst_new.control_changes
 
 def fade_in_out(
     wav, fade_in_len=None, fade_out_len=None):

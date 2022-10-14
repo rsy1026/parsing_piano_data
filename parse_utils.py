@@ -277,11 +277,6 @@ def quantize_by_time(x, base):
 
     return float(x_new)
 
-def quantize_to_sample(value, unit):
-    quantized = quantize(np.round(value, 3), unit=unit)
-    sample = int(quantized // unit)
-    return sample
-
 def quantize_to_frame(value, unit):
     # for making pianoroll from MIDI 
     sample = int(round(Decimal(str(value / unit))))
@@ -369,14 +364,10 @@ def make_pianoroll(notes, value=None, start=None, maxlen=None,
     offset_list = list()
     for i, n in enumerate(notes):
         pitch = n.pitch - start_pitch
-        if n.pitch >= 70: # right-hand(temporary)
-            hand = 0
-        elif n.pitch < 70: # left-hand(temporary)
-            hand = 1
-        # onset = quantize_to_sample(
-        #     n.start - start + front_buffer, unit=unit)
-        # offset = quantize_to_sample(
-        #     n.end - start + front_buffer, unit=unit)
+        # if n.pitch >= 70: # right-hand(temporary)
+        #     hand = 0
+        # elif n.pitch < 70: # left-hand(temporary)
+        #     hand = 1
         dur_raw = n.end - n.start
         dur = quantize_to_frame(dur_raw, unit=unit) 
         onset = quantize_to_frame(
@@ -387,8 +378,8 @@ def make_pianoroll(notes, value=None, start=None, maxlen=None,
             vel = value[i]
         else:
             vel = vel
-        onset_list.append([hand, onset])
-        offset_list.append([hand, offset]) 
+        # onset_list.append([hand, onset])
+        # offset_list.append([hand, offset]) 
 
         # if onset < maxlen:  
         if onset >= maxlen: 

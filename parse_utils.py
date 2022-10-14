@@ -951,6 +951,9 @@ def extract_midi_notes(
         for cc in inst.control_changes:
             ccs.append(cc)
 
+    if len(midi_notes) == 0:
+        return None, None
+
     midi_notes.sort(key=lambda x: x.start)
     if raw is False:
         midi_notes_ = remove_overlaps_midi(midi_notes)

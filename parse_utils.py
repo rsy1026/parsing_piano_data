@@ -29,101 +29,6 @@ dc.prec = 48
 dc.rounding = ROUND_HALF_UP
 
 
-def ind2str(ind, n):
-    ind_ = str(ind)
-    rest = n - len(ind_)
-    str_ind = rest*"0" + ind_
-    return str_ind 
-
-def remove_files():
-    # parent_path = '/home/rsy/Dropbox/RSY/Piano/data/chopin_maestro/original'
-    # parent_path = '/data/chopin_cleaned/original/Chopin_Nocturne'
-    parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
-    # assert os.path.exists(parent_path)
-    # parent_path = '/data/chopin_cleaned/exp_data/test/raw/Chopin_Etude'
-    # parent_path = '/data/chopin_cleaned/original'
-    categs = sorted(glob(os.path.join(parent_path, '*/')))
-    all_files = list()
-    for c in categs:
-        # c = categs[3]
-        pieces = sorted(glob(os.path.join(c, '*/')))
-        for p in pieces:
-            # p = pieces[-1]
-            # p_name = p.split("/")[-2]
-            # if p_name.split('_')[0] not in ['10', '25']:
-            #     all_files += [p]
-
-            # c_name = "Mozart_Piano_Sonatas"
-            # p_name = "8-1"
-
-            # p = os.path.join(parent_path, c_name, p_name)
-            players = sorted(glob(os.path.join(p, '*/')))
-            npy_files = sorted(glob(os.path.join(p, '*.npy')))
-            # xml_files = sorted(glob(os.path.join(p, '*.musicxml')))
-            # mid_files = sorted(glob(os.path.join(p, '*.mid')))
-            all_files += npy_files
-            # for a in all_files:
-            #     os.remove(a)
-            for pl in players:
-                txt_files = sorted(glob(os.path.join(pl, '*.txt')))
-                npy_files = sorted(glob(os.path.join(pl, '*.npy')))
-                # npy_files = sorted(glob(os.path.join(pl, 'inp*.npy')))
-                # npy_files += sorted(glob(os.path.join(pl, 'oup*.npy')))
-                # xml_files = sorted(glob(os.path.join(pl, '*.xml')))
-                mid_files = sorted(glob(os.path.join(pl, '*.cleaned.mid')))
-                # mid_files += sorted(glob(os.path.join(pl, 'score_ref.mid')))
-                # all_files = sorted(glob(os.path.join(pl, '*.cleaned.cleaned_*')))
-                # all_files = txt_files + npy_files + xml_files + mid_files
-                all_files += txt_files + mid_files + npy_files
-                # all_files = mid_files + txt_files
-                # shutil.rmtree(pl[:-1])
-                
-    ## REMOVE ALL FILES ##
-    for a in all_files:
-        os.remove(a)
-
-
-def remove_midi_files():
-    # parent_path = '/home/rsy/Dropbox/RSY/Piano/data/chopin_maestro/original'
-    # parent_path = '/data/chopin_cleaned/original/Chopin_Nocturne'
-    # parent_path = '/data/asap_dataset/exp_data/listening_test/raw'
-    # assert os.path.exists(parent_path)
-    # parent_path = '/data/chopin_cleaned/exp_data/test/raw/Chopin_Etude'
-    parent_path = '/data/chopin_cleaned/original'
-    categs = sorted(glob(os.path.join(parent_path, '*/')))
-    for c in categs:
-        pieces = sorted(glob(os.path.join(c, '*/')))
-        for p in pieces:
-            # p = pieces[-1]
-
-            # c_name = "Mozart_Piano_Sonatas"
-            # p_name = "8-1"
-
-            # p = os.path.join(parent_path, c_name, p_name)
-            players = sorted(glob(os.path.join(p, '*/')))
-            # npy_files = sorted(glob(os.path.join(p, 'oup3.*.npy')))
-            # xml_files = sorted(glob(os.path.join(p, '*.musicxml')))
-            # mid_files = sorted(glob(os.path.join(p, '*.mid')))
-            # all_files = mid_files + xml_files
-            # for a in all_files:
-            #     os.remove(a)
-            for pl in players:
-                mid_files = sorted(glob(os.path.join(pl, '*.mid')))
-                MID_files = sorted(glob(os.path.join(pl, '*.MID')))
-
-                if len(MID_files) > 0 and len(mid_files) > 0:
-                    all_files = mid_files
-                else:
-                    all_files = []
-                    # all_files = mid_files + txt_files
-                for a in all_files:
-                    os.remove(a)
-
-# def moving_average(x, w):
-#     assert len(x.shape) == 1
-#     pad = w // 2
-#     x = np.concatenate([np.zeros_like(x[:pad]), x, np.zeros_like(x[:pad])], axis=0)
-#     return np.convolve(x, np.ones(w), 'valid') / w
 
 class GaussianFeatures(BaseEstimator, TransformerMixin):
     '''
@@ -150,6 +55,14 @@ class GaussianFeatures(BaseEstimator, TransformerMixin):
         return self._gauss_basis(X[:, :, np.newaxis], self.centers_,
                                  self.width_, axis=1)
 
+
+def ind2str(ind, n):
+    ind_ = str(ind)
+    rest = n - len(ind_)
+    str_ind = rest*"0" + ind_
+    return str_ind 
+
+
 def pad_for_same_length(x1, x2):
     a = copy.deepcopy(x1)
     b = copy.deepcopy(x2)
@@ -167,6 +80,15 @@ def pad_for_same_length(x1, x2):
 def linear_predict(y):
     x = np.arange(len(y)).reshape(-1, 1)
     y = y
+    model = LinearRegression()
+    model.fit(x, y)
+    yfit = model.predict(x)
+    coef = model.coef_
+    itct = model.intercept_
+
+    return yfit, coef, itct
+
+def linear_predict_IO(x, y):
     model = LinearRegression()
     model.fit(x, y)
     yfit = model.predict(x)
@@ -222,36 +144,6 @@ def moving_average(data, win_len=None, stat=np.mean, half=False):
 
     return np.asarray(new_data)
 
-def moving_mode(data, win_len=None, half=False):
-    '''
-    data = [timestep, feature]
-    '''
-    assert len(data.shape) == 2
-    new_data = list()
-
-    if half is False:
-        assert win_len % 2 == 1 
-        assert win_len > 1
-        unit = (win_len - 1) // 2
-    elif half is True:
-        unit = int(win_len - 1)
-
-    for i in range(len(data)):
-        if half is False:
-            minind = np.max([0, i-unit])
-            maxind = np.min([len(data), i+unit+1])
-        elif half is True:
-            minind = np.max([0, i-unit])
-            maxind = np.min([len(data), i+1])     
-        data_in_range = data[minind:maxind]       
-        
-        in_range = [d for d in data_in_range if d is not None]
-        assert len(in_range) > 0
-        mean_data = stats.mode(in_range, axis=0).mode.reshape(-1,)
-        new_data.append(mean_data)
-
-    return np.asarray(new_data)
-
 def quantize(x, unit=None):
     div = x // unit
     x_prev = unit * div
@@ -282,28 +174,49 @@ def quantize_to_frame(value, unit):
     sample = int(round(Decimal(str(value / unit))))
     return sample
 
-def quantize_notes(notes, standard):
+def quantize_notes(notes, unit):
     for note in notes:
-        new_start = quantize_by_time(note.start, standard)
+        new_start = quantize_by_time(note.start, unit)
         note.start = new_start
     return notes
 
-def quantize_by_onset(mid, orig_notes):
+def quantize_by_onset(orig_notes, mid1, mid2=None):
     notes = copy.deepcopy(orig_notes)
-    wav = convert_to_wav(mid, return_wavname=True)
-    y, sr = librosa.load(wav)
+    notes.sort(key=lambda x: x.start)
+
+    wav1 = convert_to_wav(mid1, return_wavname=True)
+    y, sr = librosa.load(wav1)
+
+    if mid2 is not None:
+        wav2 = convert_to_wav(mid2, return_wavname=True)
+        y2, sr2 = librosa.load(wav2)  
+        assert sr == sr2
+
+        diff = np.abs(len(y2) - len(y))
+        if len(y2) >= len(y):
+            y_ = np.concatenate([y, np.zeros(diff,)], axis=0)
+            y2_ = y2
+        elif len(y2) < len(y):
+            y_ = y
+            y2_ = np.concatenate([y2, np.zeros(diff,)], axis=0)   
+        y = y_ + y2_
+
     hop = 512
     # peak detection
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop, aggregate=np.median)
     # peaks = librosa.onset.onset_detect(y=y, sr=sr, units='time') # 'time, frames'
-    peaks = librosa.util.peak_pick(onset_env, pre_max=3, post_max=3, pre_avg=3, post_avg=5, delta=0.5, wait=10)
+    # peaks = librosa.util.peak_pick(onset_env, pre_max=3, post_max=3, pre_avg=3, post_avg=5, delta=0.5, wait=10)
     tempo, beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
+    # pulse = librosa.beat.plp(onset_envelope=onset_env, sr=sr)
+    # beats_plp = np.flatnonzero(librosa.util.localmax(pulse))
     time_unit = (1/sr)*hop
-    peaks_time = peaks * time_unit
-    new_notes = quantize_notes(notes, peaks_time)
+    # peaks_time = peaks * time_unit
+    # new_notes = quantize_notes(notes, peaks_time) # quantize note.start to one of the peaks_time
 
     # remove wav
-    os.remove(wav)
+    os.remove(wav1)
+    if mid2 is not None:
+        os.remove(wav2)
 
     # plt.figure(figsize=(50,7))
     # plt.subplot(211)
@@ -327,7 +240,8 @@ def quantize_by_onset(mid, orig_notes):
     # plt.imshow(roll, aspect='auto', interpolation='none')
     # plt.vlines(peak_onsets, ymin=0, ymax=88, colors='r', linewidth=0.5)
     # plt.savefig("roll_ex.png")
-    return new_notes, peaks, beats, time_unit
+    # return new_notes, peaks, beats, time_unit
+    return beats, time_unit
 
 
 
@@ -385,8 +299,9 @@ def make_pianoroll(notes, value=None, start=None, maxlen=None,
         if onset >= maxlen: 
             print(onset, maxlen)
             raise AssertionError
-        roll[pitch, onset:offset] = vel
-        onset_roll[pitch, onset] = offset - onset
+        roll[pitch, max(0, onset):offset] = vel
+        if onset >= 0:
+            onset_roll[pitch, onset] = offset - onset
             
     if cut_end is True:
         last_offset = np.max([o[1] for o in offset_list])
